@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"ls -la /Users/sonmingi/Desktop/setting/issue-pilot/.gitignore 2>&1\",\"description\":\"Check if .gitignore exists\"}",
+  "error": "Exit code 1\nls: /Users/sonmingi/Desktop/setting/issue-pilot/.gitignore: No such file or directory\n\nls: /Users/sonmingi/Desktop/setting/issue-pilot/.gitignore: No such file or directory",
+  "timestamp": "2026-03-06T09:58:09.751Z",
+  "retry_count": 1
+}

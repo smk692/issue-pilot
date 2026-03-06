@@ -1,0 +1,333 @@
+{
+  "version": "1.0.0",
+  "lastScanned": 1772613748716,
+  "projectRoot": "/Users/sonmingi/Desktop/setting/issue-pilot",
+  "techStack": {
+    "languages": [
+      {
+        "name": "JavaScript/TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "package.json"
+        ]
+      },
+      {
+        "name": "TypeScript",
+        "version": null,
+        "confidence": "high",
+        "markers": [
+          "tsconfig.json"
+        ]
+      }
+    ],
+    "frameworks": [],
+    "packageManager": "npm",
+    "runtime": null
+  },
+  "build": {
+    "buildCommand": "npm run build",
+    "testCommand": null,
+    "lintCommand": null,
+    "devCommand": "npm run dev",
+    "scripts": {
+      "build": "tsc",
+      "start": "node dist/index.js",
+      "dev": "tsx src/index.ts"
+    }
+  },
+  "conventions": {
+    "namingStyle": "camelCase",
+    "importStyle": null,
+    "testPattern": null,
+    "fileOrganization": null
+  },
+  "structure": {
+    "isMonorepo": false,
+    "workspaces": [],
+    "mainDirectories": [
+      "src"
+    ],
+    "gitBranches": null
+  },
+  "customNotes": [],
+  "directoryMap": {
+    "data": {
+      "path": "data",
+      "purpose": "Data files",
+      "fileCount": 3,
+      "lastAccessed": 1772613748701,
+      "keyFiles": [
+        "state.db",
+        "state.db-shm",
+        "state.db-wal"
+      ]
+    },
+    "dist": {
+      "path": "dist",
+      "purpose": "Distribution/build output",
+      "fileCount": 4,
+      "lastAccessed": 1772613748701,
+      "keyFiles": [
+        "index.d.ts",
+        "index.d.ts.map",
+        "index.js",
+        "index.js.map"
+      ]
+    },
+    "src": {
+      "path": "src",
+      "purpose": "Source code",
+      "fileCount": 1,
+      "lastAccessed": 1772613748705,
+      "keyFiles": [
+        "index.ts"
+      ]
+    },
+    "dist/config": {
+      "path": "dist/config",
+      "purpose": "Configuration files",
+      "fileCount": 4,
+      "lastAccessed": 1772613748705,
+      "keyFiles": [
+        "config.d.ts",
+        "config.d.ts.map",
+        "config.js"
+      ]
+    },
+    "src/config": {
+      "path": "src/config",
+      "purpose": "Configuration files",
+      "fileCount": 1,
+      "lastAccessed": 1772613748706,
+      "keyFiles": [
+        "config.ts"
+      ]
+    }
+  },
+  "hotPaths": [
+    {
+      "path": "src/schedulers/dev-scheduler.ts",
+      "accessCount": 25,
+      "lastAccessed": 1772789970763,
+      "type": "file"
+    },
+    {
+      "path": "src/schedulers/plan-scheduler.ts",
+      "accessCount": 17,
+      "lastAccessed": 1772789979975,
+      "type": "file"
+    },
+    {
+      "path": "config.json",
+      "accessCount": 13,
+      "lastAccessed": 1772785182606,
+      "type": "file"
+    },
+    {
+      "path": "src/state/types.ts",
+      "accessCount": 10,
+      "lastAccessed": 1772790041445,
+      "type": "file"
+    },
+    {
+      "path": "src/index.ts",
+      "accessCount": 9,
+      "lastAccessed": 1772785180678,
+      "type": "file"
+    },
+    {
+      "path": "src/config/config.ts",
+      "accessCount": 9,
+      "lastAccessed": 1772790041878,
+      "type": "file"
+    },
+    {
+      "path": "src/schedulers/base-scheduler.ts",
+      "accessCount": 8,
+      "lastAccessed": 1772785182067,
+      "type": "file"
+    },
+    {
+      "path": "src/schedulers/merge-scheduler.ts",
+      "accessCount": 8,
+      "lastAccessed": 1772785202598,
+      "type": "file"
+    },
+    {
+      "path": "src/state/store.ts",
+      "accessCount": 8,
+      "lastAccessed": 1772789643919,
+      "type": "file"
+    },
+    {
+      "path": "",
+      "accessCount": 7,
+      "lastAccessed": 1772785192311,
+      "type": "directory"
+    },
+    {
+      "path": "src/clients/github-client.ts",
+      "accessCount": 7,
+      "lastAccessed": 1772785212676,
+      "type": "file"
+    },
+    {
+      "path": "src/state/lock-manager.ts",
+      "accessCount": 6,
+      "lastAccessed": 1772785212589,
+      "type": "file"
+    },
+    {
+      "path": "package.json",
+      "accessCount": 5,
+      "lastAccessed": 1772785182659,
+      "type": "file"
+    },
+    {
+      "path": "src/clients/omc-client.ts",
+      "accessCount": 4,
+      "lastAccessed": 1772784715359,
+      "type": "file"
+    },
+    {
+      "path": "Makefile",
+      "accessCount": 4,
+      "lastAccessed": 1772789410666,
+      "type": "file"
+    },
+    {
+      "path": "src/clients/jira-client.ts",
+      "accessCount": 3,
+      "lastAccessed": 1772784715560,
+      "type": "file"
+    },
+    {
+      "path": "src/security/input-sanitizer.ts",
+      "accessCount": 3,
+      "lastAccessed": 1772784716020,
+      "type": "file"
+    },
+    {
+      "path": "src/security/pre-pr-scanner.ts",
+      "accessCount": 3,
+      "lastAccessed": 1772784716343,
+      "type": "file"
+    },
+    {
+      "path": "tsconfig.json",
+      "accessCount": 3,
+      "lastAccessed": 1772785191911,
+      "type": "file"
+    },
+    {
+      "path": "src/server/routes/events.ts",
+      "accessCount": 3,
+      "lastAccessed": 1772789706733,
+      "type": "file"
+    },
+    {
+      "path": ".env.example",
+      "accessCount": 2,
+      "lastAccessed": 1772784728385,
+      "type": "file"
+    },
+    {
+      "path": "src/server/routes/api.ts",
+      "accessCount": 2,
+      "lastAccessed": 1772789714215,
+      "type": "file"
+    },
+    {
+      "path": "src",
+      "accessCount": 2,
+      "lastAccessed": 1772791719027,
+      "type": "directory"
+    },
+    {
+      "path": "web/src/api/types.ts",
+      "accessCount": 1,
+      "lastAccessed": 1772789629396,
+      "type": "file"
+    },
+    {
+      "path": "web/src/pages/DashboardPage.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789643933,
+      "type": "file"
+    },
+    {
+      "path": "web/src/pages/ProjectsPage.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789644149,
+      "type": "file"
+    },
+    {
+      "path": "web/src/components/dashboard/SchedulerStatusCard.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789650489,
+      "type": "file"
+    },
+    {
+      "path": "web/src/components/dashboard/PipelineFlow.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789650620,
+      "type": "file"
+    },
+    {
+      "path": "web/src/components/dashboard/RecentActivityFeed.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789651063,
+      "type": "file"
+    },
+    {
+      "path": "web/src/components/dashboard/StatsSummary.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789651210,
+      "type": "file"
+    },
+    {
+      "path": "web/src/pages/ProjectDetailPage.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789656807,
+      "type": "file"
+    },
+    {
+      "path": "web/src/components/project/ProjectCard.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772789657216,
+      "type": "file"
+    },
+    {
+      "path": "web/src/hooks/useApi.ts",
+      "accessCount": 1,
+      "lastAccessed": 1772789658660,
+      "type": "file"
+    },
+    {
+      "path": "web/src/hooks/useSSE.ts",
+      "accessCount": 1,
+      "lastAccessed": 1772789658713,
+      "type": "file"
+    },
+    {
+      "path": "web/src/api/client.ts",
+      "accessCount": 1,
+      "lastAccessed": 1772789668169,
+      "type": "file"
+    },
+    {
+      "path": "web/src/App.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772790042371,
+      "type": "file"
+    },
+    {
+      "path": "web/src/components/layout/Sidebar.tsx",
+      "accessCount": 1,
+      "lastAccessed": 1772790056476,
+      "type": "file"
+    }
+  ],
+  "userDirectives": []
+}

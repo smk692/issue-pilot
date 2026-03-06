@@ -1,0 +1,7 @@
+{
+  "tool_name": "Bash",
+  "tool_input_preview": "{\"command\":\"curl -s -N --max-time 5 http://localhost:3001/api/events 2>&1\",\"description\":\"SSE 연결 확인\"}",
+  "error": "Exit code 28\nid: 1\nevent: scheduler_tick\ndata: {\"id\":1,\"ts\":\"2026-03-06T09:32:26.861Z\",\"type\":\"scheduler_tick\",\"scheduler\":\"dev-scheduler\",\"projectId\":\"petfriends-ads\",\"processedCount\":0}\n\nid: 2\nevent: scheduler_tick\ndata: {\"id\":2,\"ts\":\"2026-03-06T09:32:27.155Z\",\"type\":\"scheduler_tick\",\"scheduler\":\"plan-scheduler\",\"projectId\":\"petfriends-ads\",\"processedCount\":0}\n\nid: 3\nevent: scheduler_tick\ndata: {\"id\":3,\"ts\":\"2026-03-06T09:32:27.201Z\",\"type\":\"scheduler_tick\",\"scheduler\":\"dev-scheduler\",\"project...",
+  "timestamp": "2026-03-06T09:33:34.288Z",
+  "retry_count": 1
+}

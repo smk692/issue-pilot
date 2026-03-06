@@ -1,0 +1,30 @@
+{
+  "name": "issue-pilot",
+  "version": "0.1.0",
+  "description": "GitHub Issue 기반 자동화 워크플로우 시스템",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc && cd web && npm run build",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts",
+    "dev:web": "cd web && npm run dev",
+    "postinstall": "cd web && npm install"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "@octokit/rest": "^21.0.0",
+    "better-sqlite3": "^11.0.0",
+    "cors": "^2.8.6",
+    "dotenv": "^17.3.1",
+    "express": "^4.22.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.8",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.7.0"
+  }
+}

@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+web/dist/
+
+# Environment & secrets
+.env
+.env.local
+.env.*.local
+
+# Config (contains org/repo/credentials)
+config.json
+
+# Runtime data
+data/
+.repos/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo

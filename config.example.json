@@ -1,0 +1,76 @@
+{
+  "projects": [
+    {
+      "id": "my-backend",
+      "github": {
+        "owner": "your-org",
+        "repo": "your-backend-repo",
+        "baseBranch": "main",
+        "repoPath": ".repos/your-backend-repo"
+      }
+    },
+    {
+      "id": "my-frontend",
+      "github": {
+        "owner": "your-org",
+        "repo": "your-frontend-repo",
+        "baseBranch": "main",
+        "repoPath": ".repos/your-frontend-repo"
+      }
+    }
+  ],
+  "labels": {
+    "planRequest": "이슈 플랜",
+    "planning": "플랜중",
+    "planDone": "플랜 완료",
+    "planRevise": "플랜 수정",
+    "developing": "개발 진행",
+    "devFailed": "개발 실패",
+    "done": "완료"
+  },
+  "jira": {
+    "enabled": false,
+    "host": "your-domain.atlassian.net",
+    "projectKey": "PROJ",
+    "issueType": "Task"
+  },
+  "schedulers": {
+    "planPollIntervalSec": 120,
+    "devPollIntervalSec": 120,
+    "mergePollIntervalSec": 180,
+    "concurrency": 1
+  },
+  "retry": {
+    "maxRetries": 3,
+    "retryDelayMs": 60000,
+    "backoffMultiplier": 2
+  },
+  "omc": {
+    "enabled": true,
+    "timeoutMs": 1800000,
+    "permissionMode": "acceptEdits",
+    "allowedTools": ["Read", "Edit", "Write", "Bash", "Glob", "Grep", "Agent"],
+    "disallowedTools": ["EnterWorktree", "TeamCreate", "TeamDelete"],
+    "allowedPaths": ["src/", "tests/", "docs/"],
+    "skills": {
+      "plan": "ralplan",
+      "execute": "autopilot",
+      "buildFix": "build-fix"
+    },
+    "fallbackIfOmcMissing": true
+  },
+  "security": {
+    "sanitizeInput": true,
+    "preScanEnabled": true,
+    "secretScanEnabled": true,
+    "blockedPatterns": [
+      "system prompt",
+      "ignore previous",
+      "override instructions"
+    ]
+  },
+  "server": {
+    "port": 3001,
+    "enabled": true
+  }
+}
