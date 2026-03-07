@@ -72,5 +72,26 @@
   "server": {
     "port": 3001,
     "enabled": true
+  },
+  "healing": {
+    "enabled": true,
+    "maxAttemptsPerErrorType": 2,
+    "strategies": {
+      "GIT_CONFLICT": ["git_reset_and_retry", "resolve_conflict_ai"],
+      "BUILD_ERROR": ["build_fix", "clean_and_rebuild"],
+      "TEST_FAILURE": ["test_fix"],
+      "NETWORK_ERROR": ["retry_with_backoff"]
+    }
+  },
+  "thinking": {
+    "enabled": true,
+    "outputDir": ".omc/thinking",
+    "includeTimestamp": true,
+    "maxFileSize": 5242880
+  },
+  "aiAnalyzer": {
+    "enabled": true,
+    "analyzeOnFinalFailure": true,
+    "outputDir": ".omc/errors"
   }
 }

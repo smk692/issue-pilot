@@ -52,7 +52,56 @@ function initSchema(database: Database.Database): void {
       enabled    INTEGER NOT NULL DEFAULT 1,
       updated_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS healing_attempts (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    TEXT    NOT NULL,
+      issue_number  INTEGER NOT NULL,
+      error_type    TEXT    NOT NULL,
+      attempt_count INTEGER NOT NULL DEFAULT 1,
+      max_attempts  INTEGER NOT NULL DEFAULT 2,
+      strategy      TEXT    NOT NULL,
+      success       INTEGER NOT NULL DEFAULT 0,
+      error_message TEXT,
+      created_at    TEXT    NOT NULL,
+      FOREIGN KEY (project_id, issue_number) REFERENCES issues(project_id, issue_number)
+    );
+
+    CREATE TABLE IF NOT EXISTS error_analyses (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      project_id    TEXT    NOT NULL,
+      issue_number  INTEGER NOT NULL,
+      error_type    TEXT    NOT NULL,
+      root_cause    TEXT    NOT NULL,
+      suggested_fix TEXT    NOT NULL,
+      confidence    REAL    NOT NULL DEFAULT 0.5,
+      created_at    TEXT    NOT NULL,
+      FOREIGN KEY (project_id, issue_number) REFERENCES issues(project_id, issue_number)
+    );
   `);
+
+  // 기존 테이블 마이그레이션 (컬럼 추가)
+  migrateSchema(database);
+}
+
+function migrateSchema(database: Database.Database): void {
+  // issues 테이블에 last_error_type 컬럼 추가 시도
+  try {
+    database.exec(`
+      ALTER TABLE issues ADD COLUMN last_error_type TEXT;
+    `);
+  } catch {
+    // 이미 컬럼이 존재하면 무시
+  }
+
+  // issues 테이블에 healing_attempts_count 컬럼 추가 시도
+  try {
+    database.exec(`
+      ALTER TABLE issues ADD COLUMN healing_attempts_count INTEGER DEFAULT 0;
+    `);
+  } catch {
+    // 이미 컬럼이 존재하면 무시
+  }
 }
 
 function rowToRecord(row: any): IssueRecord {
@@ -289,4 +338,164 @@ export function getProjectStateCounts(projectId: string): Record<string, number>
     result[row.current_state] = row.cnt;
   }
   return result;
+}
+
+// ── Self-Healing 관련 쿼리 함수 ────────────────────────────────────
+
+/**
+ * 특정 이슈의 에러 타입별 healing 시도 횟수를 반환한다.
+ */
+export function getHealingAttemptCount(
+  projectId: string,
+  issueNumber: number,
+  errorType: string
+): number {
+  const database = getDb();
+  const row = database
+    .prepare(
+      `SELECT COUNT(*) as cnt FROM healing_attempts
+       WHERE project_id = ? AND issue_number = ? AND error_type = ?`
+    )
+    .get(projectId, issueNumber, errorType) as { cnt: number };
+  return row?.cnt ?? 0;
+}
+
+/**
+ * Healing 시도를 기록한다.
+ */
+export function recordHealingAttempt(
+  projectId: string,
+  issueNumber: number,
+  errorType: string,
+  strategy: string,
+  success: boolean,
+  errorMessage?: string
+): void {
+  const database = getDb();
+  const now = new Date().toISOString();
+  const attemptCount = getHealingAttemptCount(projectId, issueNumber, errorType) + 1;
+
+  database
+    .prepare(
+      `INSERT INTO healing_attempts
+         (project_id, issue_number, error_type, attempt_count, strategy, success, error_message, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(
+      projectId,
+      issueNumber,
+      errorType,
+      attemptCount,
+      strategy,
+      success ? 1 : 0,
+      errorMessage ?? null,
+      now
+    );
+}
+
+/**
+ * 특정 이슈의 모든 healing 시도를 반환한다.
+ */
+export function getHealingAttempts(
+  projectId: string,
+  issueNumber: number
+): Array<{
+  errorType: string;
+  attemptCount: number;
+  strategy: string;
+  success: boolean;
+  errorMessage?: string;
+  createdAt: string;
+}> {
+  const database = getDb();
+  const rows = database
+    .prepare(
+      `SELECT error_type, attempt_count, strategy, success, error_message, created_at
+       FROM healing_attempts
+       WHERE project_id = ? AND issue_number = ?
+       ORDER BY created_at DESC`
+    )
+    .all(projectId, issueNumber) as Array<{
+      error_type: string;
+      attempt_count: number;
+      strategy: string;
+      success: number;
+      error_message: string | null;
+      created_at: string;
+    }>;
+
+  return rows.map((r) => ({
+    errorType: r.error_type,
+    attemptCount: r.attempt_count,
+    strategy: r.strategy,
+    success: r.success === 1,
+    errorMessage: r.error_message ?? undefined,
+    createdAt: r.created_at,
+  }));
+}
+
+// ── AI Error Analysis 관련 쿼리 함수 ───────────────────────────────
+
+/**
+ * 에러 분석 결과를 저장한다.
+ */
+export function saveErrorAnalysis(
+  projectId: string,
+  issueNumber: number,
+  errorType: string,
+  rootCause: string,
+  suggestedFix: string,
+  confidence: number
+): void {
+  const database = getDb();
+  const now = new Date().toISOString();
+
+  database
+    .prepare(
+      `INSERT INTO error_analyses
+         (project_id, issue_number, error_type, root_cause, suggested_fix, confidence, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`
+    )
+    .run(projectId, issueNumber, errorType, rootCause, suggestedFix, confidence, now);
+}
+
+/**
+ * 특정 이슈의 최신 에러 분석 결과를 반환한다.
+ */
+export function getLatestErrorAnalysis(
+  projectId: string,
+  issueNumber: number
+): {
+  errorType: string;
+  rootCause: string;
+  suggestedFix: string;
+  confidence: number;
+  createdAt: string;
+} | undefined {
+  const database = getDb();
+  const row = database
+    .prepare(
+      `SELECT error_type, root_cause, suggested_fix, confidence, created_at
+       FROM error_analyses
+       WHERE project_id = ? AND issue_number = ?
+       ORDER BY created_at DESC
+       LIMIT 1`
+    )
+    .get(projectId, issueNumber) as {
+      error_type: string;
+      root_cause: string;
+      suggested_fix: string;
+      confidence: number;
+      created_at: string;
+    } | undefined;
+
+  if (!row) return undefined;
+
+  return {
+    errorType: row.error_type,
+    rootCause: row.root_cause,
+    suggestedFix: row.suggested_fix,
+    confidence: row.confidence,
+    createdAt: row.created_at,
+  };
 }

@@ -109,6 +109,9 @@ export interface Config {
   omc: OmcConfig;
   security: SecurityConfig;
   server?: ServerConfig;
+  healing?: HealingConfig;
+  thinking?: ThinkingConfig;
+  aiAnalyzer?: AIAnalyzerConfig;
 }
 
 export type SchedulerType = "plan-scheduler" | "dev-scheduler" | "merge-scheduler";
@@ -224,4 +227,59 @@ export interface ActivityEntry {
   issueNumber?: number;
   prNumber?: number;
   message: string;
+}
+
+// ── Self-Healing 관련 타입 ──────────────────────────────────────────
+
+export enum ErrorType {
+  GIT_CONFLICT = "GIT_CONFLICT",
+  BUILD_ERROR = "BUILD_ERROR",
+  TEST_FAILURE = "TEST_FAILURE",
+  TIMEOUT = "TIMEOUT",
+  PERMISSION_DENIED = "PERMISSION_DENIED",
+  NETWORK_ERROR = "NETWORK_ERROR",
+  UNKNOWN = "UNKNOWN",
+}
+
+export interface HealingAttempt {
+  errorType: ErrorType;
+  attemptCount: number;
+  maxAttempts: number;
+  lastAttemptAt: string; // ISO timestamp
+  strategy: string;
+  success: boolean;
+  errorMessage?: string;
+}
+
+export interface HealingConfig {
+  enabled: boolean;
+  maxAttemptsPerErrorType: number;
+  strategies: {
+    [key in ErrorType]?: string[];
+  };
+}
+
+// ── Thinking Mode 관련 타입 ─────────────────────────────────────────
+
+export interface ThinkingConfig {
+  enabled: boolean;
+  outputDir: string;
+  includeTimestamp: boolean;
+  maxFileSize: number; // bytes
+}
+
+// ── AI Error Analyzer 관련 타입 ─────────────────────────────────────
+
+export interface AIAnalyzerConfig {
+  enabled: boolean;
+  analyzeOnFinalFailure: boolean;
+  outputDir: string;
+}
+
+export interface ErrorAnalysis {
+  errorType: ErrorType;
+  rootCause: string;
+  suggestedFix: string;
+  confidence: number; // 0-1
+  analyzedAt: string; // ISO timestamp
 }
