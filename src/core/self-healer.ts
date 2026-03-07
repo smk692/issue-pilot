@@ -60,6 +60,11 @@ export class SelfHealer {
     this.strategies.set(ErrorType.NETWORK_ERROR, [
       this.strategyRetryWithBackoff.bind(this),
     ]);
+
+    // UNKNOWN 전략 (AI 분석 기반)
+    this.strategies.set(ErrorType.UNKNOWN, [
+      this.strategyAIAnalysisAutoFix.bind(this),
+    ]);
   }
 
   /**
@@ -427,6 +432,149 @@ export class SelfHealer {
       attemptNumber: 1,
       message: "Network error - retry recommended after delay",
     };
+  }
+
+  /**
+   * AI 에러 분석 결과를 바탕으로 자동 수정 시도
+   */
+  private async strategyAIAnalysisAutoFix(
+    context: HealingContext
+  ): Promise<HealingResult> {
+    const attemptNumber = getHealingAttemptCount(
+      context.projectId,
+      context.issueNumber,
+      ErrorType.UNKNOWN
+    ) + 1;
+
+    context.thinkingRecorder?.recordThought(
+      "ai_autofix_start",
+      `Attempting AI-based auto-fix (attempt ${attemptNumber})`
+    );
+
+    try {
+      // AI 에러 분석 결과 파일 찾기 (Issue Pilot 루트의 .omc/errors/)
+      const { readdirSync, readFileSync, existsSync } = await import("fs");
+      const { join, dirname } = await import("path");
+      
+      // Issue Pilot 루트 디렉토리 찾기 (worktreePath에서 4단계 상위)
+      // worktreePath: .repos/order-management-system/.worktrees/issue-4
+      // → .worktrees (부모)
+      // → .repos/order-management-system (부모의 부모)
+      // → .repos (부모의 부모의 부모)
+      // → Issue Pilot 루트 (부모의 부모의 부모의 부모)
+      let issuePilotRoot = dirname(dirname(dirname(dirname(context.worktreePath))));
+      const errorsDir = join(issuePilotRoot, ".omc", "errors");
+      
+      if (!existsSync(errorsDir)) {
+        return {
+          success: false,
+          errorType: ErrorType.UNKNOWN,
+          strategy: "ai_analysis_auto_fix",
+          attemptNumber,
+          message: `AI 에러 분석 디렉토리 없음: ${errorsDir}`,
+        };
+      }
+      
+      const errorFiles = readdirSync(errorsDir)
+        .filter(f => f.startsWith(`error-${context.issueNumber}-`) && f.endsWith(".md"))
+        .sort()
+        .reverse(); // 최신 파일 먼저
+
+      if (errorFiles.length === 0) {
+        return {
+          success: false,
+          errorType: ErrorType.UNKNOWN,
+          strategy: "ai_analysis_auto_fix",
+          attemptNumber,
+          message: "AI 분석 결과 파일을 찾을 수 없음",
+        };
+      }
+
+      // 최신 AI 분석 결과 읽기
+      const latestAnalysis = readFileSync(join(errorsDir, errorFiles[0]), "utf-8");
+      
+      context.thinkingRecorder?.recordThought(
+        "ai_analysis_loaded",
+        `Loaded AI analysis from ${errorFiles[0]}`
+      );
+
+      // OMC autopilot에게 AI 분석 결과 기반 수정 요청
+      const fixPlan = [
+        `## AI 에러 분석 기반 자동 수정`,
+        ``,
+        latestAnalysis,
+        ``,
+        `**작업 지시:**`,
+        `- 위 AI 분석의 "Suggested Fix" 섹션을 참고하여 실제 코드를 수정하세요`,
+        `- 빌드와 테스트가 통과하는지 확인하세요`,
+        `- 최소한의 변경으로 문제를 해결하세요`,
+      ].join("\n");
+
+      const result = await context.omc.executeCode(fixPlan);
+
+      if (result.success) {
+        recordHealingAttempt(
+          context.projectId,
+          context.issueNumber,
+          ErrorType.UNKNOWN,
+          "ai_analysis_auto_fix",
+          true
+        );
+        context.thinkingRecorder?.recordThought(
+          "ai_autofix_success",
+          "AI-based fix applied successfully"
+        );
+
+        return {
+          success: true,
+          errorType: ErrorType.UNKNOWN,
+          strategy: "ai_analysis_auto_fix",
+          attemptNumber,
+          message: `AI 분석 기반 자동 수정 완료 (${result.sessionId})`,
+        };
+      } else {
+        recordHealingAttempt(
+          context.projectId,
+          context.issueNumber,
+          ErrorType.UNKNOWN,
+          "ai_analysis_auto_fix",
+          false,
+          result.error
+        );
+
+        return {
+          success: false,
+          errorType: ErrorType.UNKNOWN,
+          strategy: "ai_analysis_auto_fix",
+          attemptNumber,
+          message: `AI 자동 수정 실패: ${result.error}`,
+        };
+      }
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      
+      context.thinkingRecorder?.recordThought(
+        "ai_autofix_error",
+        `AI auto-fix failed: ${errorMsg}`
+      );
+
+      recordHealingAttempt(
+        context.projectId,
+        context.issueNumber,
+        ErrorType.UNKNOWN,
+        "ai_analysis_auto_fix",
+        false,
+        errorMsg
+      );
+
+      return {
+        success: false,
+        errorType: ErrorType.UNKNOWN,
+        strategy: "ai_analysis_auto_fix",
+        attemptNumber,
+        message: `AI 자동 수정 중 에러: ${errorMsg}`,
+      };
+    }
   }
 }
 

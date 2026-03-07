@@ -4,6 +4,8 @@ import { join, dirname } from "path";
 import { BaseScheduler } from "./base-scheduler.js";
 import { GitHubClient } from "../clients/github-client.js";
 import { OmcClient } from "../clients/omc-client.js";
+import type { OmcObserver } from "../clients/omc-client.js";
+import { registerAgent, unregisterAgent, updateAgentActivity } from "../state/active-agents.js";
 import { JiraClient } from "../clients/jira-client.js";
 import { sanitizeIssueBody } from "../security/input-sanitizer.js";
 import { scanBeforePR } from "../security/pre-pr-scanner.js";
@@ -17,6 +19,9 @@ import { errorClassifier } from "../core/error-classifier.js";
 import { ThinkingRecorder, getDefaultThinkingConfig } from "../core/thinking-recorder.js";
 import { AIErrorAnalyzer, getDefaultAIAnalyzerConfig } from "../core/ai-error-analyzer.js";
 import type { AIAnalyzerConfig } from "../state/types.js";
+import { sendWebhook } from "../utils/webhook.js";
+import { IssueLogger } from "../utils/issue-logger.js";
+import { getProjectRoot } from "../config/config.js";
 
 const PLAN_START_MARKER = "<!-- ISSUE_PILOT_PLAN_START -->";
 const PLAN_END_MARKER = "<!-- ISSUE_PILOT_PLAN_END -->";
@@ -134,8 +139,10 @@ export class DevScheduler extends BaseScheduler {
     const repoPath = project.github.repoPath;
     let worktreePath = "";
     let branchName = "";
+    const issueLog = new IssueLogger(projectId, issueNumber, getProjectRoot());
 
     try {
+      issueLog.info("개발 시작");
       // 1) 대상 레포 클론 확인
       this.ensureRepoCloned(project);
 
@@ -180,6 +187,7 @@ export class DevScheduler extends BaseScheduler {
       branchName = jiraTicketKey
         ? `feature/${jiraTicketKey}`
         : `feature/issue-${issueNumber}`;
+      issueLog.info(`브랜치 생성: ${branchName}`);
 
       // 6) 워크트리 생성 (프로젝트별 repoPath 하위)
       const worktreeBase = join(repoPath, ".worktrees");
@@ -190,10 +198,17 @@ export class DevScheduler extends BaseScheduler {
 
       mkdirSync(worktreeBase, { recursive: true });
       this.log(`[${projectId}] 워크트리 생성: ${worktreePath}`);
-      execSync(
-        `git -C "${repoPath}" worktree add "${worktreePath}" -b ${branchName} origin/${baseBranch}`,
-        { stdio: "pipe", timeout: 30_000 }
-      );
+      try {
+        const result = execSync(
+          `git -C "${repoPath}" worktree add "${worktreePath}" -b ${branchName} origin/${baseBranch}`,
+          { stdio: "pipe", timeout: 30_000, encoding: "utf-8" }
+        );
+        this.log(`[${projectId}] git worktree add 성공: ${result.trim()}`);
+      } catch (err: any) {
+        const stderr = err.stderr?.toString() || err.message;
+        this.log(`[${projectId}] ERROR git worktree add 실패: ${stderr}`);
+        throw new Error(`git worktree add failed: ${stderr}`);
+      }
 
       // 상태 업데이트
       updateState(projectId, issueNumber, IssueState.DEVELOPING, { branchName, retryCount });
@@ -205,6 +220,7 @@ export class DevScheduler extends BaseScheduler {
 
       // 8) OMC autopilot으로 코드 변경 (cwd = 워크트리)
       this.log(`[${projectId}] 이슈 #${issueNumber} autopilot 실행 중 (워크트리: ${worktreePath})...`);
+      issueLog.info("autopilot 실행 중...");
 
       // ThinkingRecorder 생성 (Thinking Mode 활성화 시)
       const thinkingRecorder = this.thinkingConfig.enabled
@@ -213,15 +229,58 @@ export class DevScheduler extends BaseScheduler {
 
       thinkingRecorder?.recordThought("init", `Starting development for issue #${issueNumber}`);
 
+      const agentStartedAt = new Date().toISOString();
+      registerAgent({
+        projectId,
+        issueNumber,
+        skill: "autopilot",
+        sessionId: "",
+        startedAt: agentStartedAt,
+        toolUses: 0,
+      });
+
+      const observer: OmcObserver = {
+        onProgress({ skill, toolName, text, toolUses }) {
+          updateAgentActivity(projectId, issueNumber, { toolUses });
+          eventBus.emit("dashboard", {
+            id: 0,
+            ts: new Date().toISOString(),
+            type: "agent_progress",
+            projectId,
+            issueNumber,
+            skill,
+            toolName,
+            text,
+            toolUses,
+          });
+        },
+        onHeartbeat({ skill, elapsedMs, toolUses }) {
+          eventBus.emit("dashboard", {
+            id: 0,
+            ts: new Date().toISOString(),
+            type: "agent_heartbeat",
+            projectId,
+            issueNumber,
+            skill,
+            elapsedMs,
+            toolUses,
+          });
+        },
+        onComplete() {
+          unregisterAgent(projectId, issueNumber);
+        },
+      };
+
       const omc = new OmcClient({
         cwd: worktreePath,
         allowedTools: this.config.omc.allowedTools,
         disallowedTools: this.config.omc.disallowedTools,
-        allowedPaths: this.config.omc.allowedPaths,
+        allowedPaths: [worktreePath],  // 워크트리 경로만 허용 (main 브랜치 오염 방지)
         timeoutMs: this.config.omc.timeoutMs,
         permissionMode: this.config.omc.permissionMode,
         thinkingConfig: this.thinkingConfig,
         issueNumber,
+        observer,
       });
 
       const execResult = await omc.executeCode(sanitizedPlan);
@@ -245,6 +304,15 @@ export class DevScheduler extends BaseScheduler {
           if (healingResult.success) {
             this.log(`[${projectId}] Self-Healing 성공: ${healingResult.strategy}`);
             thinkingRecorder?.recordThought("healing_success", `Self-healing succeeded with strategy: ${healingResult.strategy}`);
+            
+            // Webhook 발송
+            await sendWebhook({
+              eventType: "self_healing_success",
+              projectId,
+              issueNumber,
+              message: `자동 복구 성공: ${healingResult.strategy}`
+            });
+            
             // 재시도 (healing 성공 후)
             const retryResult = await omc.executeCode(sanitizedPlan);
             if (!retryResult.success) {
@@ -253,13 +321,17 @@ export class DevScheduler extends BaseScheduler {
           } else {
             this.log(`[${projectId}] Self-Healing 실패: ${healingResult.message}`);
             thinkingRecorder?.recordThought("healing_failed", healingResult.message);
+            
+            // Webhook 발송
+            await sendWebhook({
+              eventType: "error",
+              projectId,
+              issueNumber,
+              errorMessage: `Self-Healing 실패: ${healingResult.message}`
+            });
 
-            // 기존 build-fixer 폴백
-            const fixed = await this.tryFixBuild(omc, errorMessage);
-            if (!fixed) {
-              thinkingRecorder?.recordResult(false, `Development failed: ${errorMessage}`);
-              throw new Error(errorMessage);
-            }
+            thinkingRecorder?.recordResult(false, `Development failed: ${healingResult.message}`);
+            throw new Error(`코드 구현 실패 (Self-Healing도 불가): ${healingResult.message}`);
           }
         } else {
           // Self-Healing 비활성화 시 기존 로직
@@ -282,7 +354,21 @@ export class DevScheduler extends BaseScheduler {
         }
       }
 
+      // autopilot이 올바른 브랜치에서 작업했는지 검증
+      const currentBranch = execSync(`git -C "${worktreePath}" branch --show-current`, {
+        encoding: "utf-8", stdio: "pipe"
+      }).trim();
+      if (currentBranch !== branchName) {
+        throw new Error(`브랜치 불일치: ${currentBranch} (예상: ${branchName}). autopilot이 잘못된 브랜치에서 작업했습니다.`);
+      }
+
       // 10) 커밋 & 푸시 (워크트리에서)
+      const statusOutput = execSync(`git -C "${worktreePath}" status --porcelain`, {
+        encoding: "utf-8", stdio: "pipe"
+      }).trim();
+      if (!statusOutput) {
+        throw new Error(`코드 변경사항 없음: 이슈 구현이 완료되지 않았습니다 (#${issueNumber})`);
+      }
       execSync(`git -C "${worktreePath}" add -A`, { stdio: "pipe" });
       execSync(
         `git -C "${worktreePath}" commit -m "[Issue #${issueNumber}] ${issue.title}"`,
@@ -340,7 +426,19 @@ export class DevScheduler extends BaseScheduler {
         `코드 변경 및 PR이 생성되었습니다. :rocket:\n\nPR: #${prNumber}${jiraLink}`
       );
 
+      issueLog.info(`PR #${prNumber} 생성 완료 (${branchName})`);
       this.log(`[${projectId}] 이슈 #${issueNumber} PR #${prNumber} 생성 완료`);
+
+      // Webhook 발송
+      const prUrl = `https://github.com/${project.github.owner}/${project.github.repo}/pull/${prNumber}`;
+      await sendWebhook({
+        eventType: "pr_created",
+        projectId,
+        issueNumber,
+        prNumber,
+        prUrl,
+        message: "PR 생성 완료"
+      });
     } catch (err) {
       await this.handleFailure(projectId, github, issueNumber, err);
     } finally {
@@ -393,6 +491,14 @@ export class DevScheduler extends BaseScheduler {
       });
     } catch {
       // 브랜치가 없으면 무시
+    }
+    // remote 브랜치 정리 (재시도 시 이전 잘못된 상태가 남지 않도록)
+    try {
+      execSync(`git -C "${repoPath}" push origin --delete ${branchName}`, {
+        stdio: "pipe", timeout: 15_000,
+      });
+    } catch {
+      // remote 브랜치 없으면 무시
     }
   }
 

@@ -3,6 +3,12 @@ import { getConfig } from "../config/config.js";
 import { ThinkingRecorder, getDefaultThinkingConfig } from "../core/thinking-recorder.js";
 import type { ThinkingConfig } from "../state/types.js";
 
+export interface OmcObserver {
+  onProgress(data: { skill: string; toolName?: string; text?: string; toolUses: number }): void;
+  onHeartbeat(data: { skill: string; elapsedMs: number; toolUses: number }): void;
+  onComplete(result: OmcResult & { skill: string }): void;
+}
+
 export interface OmcClientConfig {
   cwd: string;
   allowedTools: string[];
@@ -12,6 +18,7 @@ export interface OmcClientConfig {
   permissionMode: "acceptEdits" | "default";
   thinkingConfig?: ThinkingConfig;
   issueNumber?: number;
+  observer?: OmcObserver;
 }
 
 export interface OmcInvocation {
@@ -99,8 +106,23 @@ export class OmcClient {
       skill: "autopilot",
       prompt: [
         `/oh-my-claudecode:autopilot`,
-        `다음 구현 계획에 따라 코드를 변경해주세요.`,
-        `빌드와 테스트가 통과하는지 반드시 검증해주세요.`,
+        `다음 구현 계획의 **모든 내용**을 실제 코드로 구현해주세요.`,
+        ``,
+        `**중요:**`,
+        `- 플랜 문서 작성이 아닌 **실제 코드 파일 생성/수정**이 목표입니다`,
+        `- backend/, frontend/, .github/workflows/ 등 **모든 필요 파일을 변경**하세요`,
+        `- .md 파일 작성보다 **실제 동작하는 코드**에 집중하세요`,
+        `- 빌드와 테스트가 통과하는지 반드시 검증해주세요`,
+        ``,
+        `**절대 금지 (dev-scheduler가 처리):**`,
+        `- git commit 실행 금지`,
+        `- git push 실행 금지`,
+        `- 현재 워크트리(cwd) 외부 디렉토리 수정 금지`,
+        ``,
+        `**완료 조건:**`,
+        `- 구현 계획에 명시된 모든 파일이 생성/수정됨`,
+        `- 빌드 성공 (npm run build / ./gradlew build)`,
+        `- 테스트 통과 (있는 경우)`,
         ``,
         `## 구현 계획`,
         planContent,
@@ -154,7 +176,40 @@ export class OmcClient {
     return result;
   }
 
-  // 5. 테스트 실패 수정 (Self-Healing 용)
+  // 5. 플랜 품질 검토 (PlanCritic 용)
+  async critiquePlan(planContent: string, issueBody: string): Promise<OmcResult> {
+    const result = await this.invoke({
+      skill: "analyze",
+      prompt: [
+        `/oh-my-claudecode:analyze`,
+        ``,
+        `다음 구현 플랜을 검토해주세요.`,
+        ``,
+        `## 이슈 내용`,
+        issueBody,
+        ``,
+        `## 구현 플랜`,
+        planContent,
+        ``,
+        `평가 기준:`,
+        `1. 구현 범위가 이슈 요구사항을 충족하는가? (0-10)`,
+        `2. 변경 파일 목록이 구체적인가?`,
+        `3. 기술적 리스크가 식별되었는가?`,
+        `4. 테스트 계획이 포함되어 있는가?`,
+        ``,
+        `출력 형식:`,
+        `점수: X/10`,
+        `문제점:`,
+        `- ...`,
+        `개선 제안:`,
+        `- ...`,
+        `[수정된 플랜이 있으면 <!-- ISSUE_PILOT_PLAN_START --> 마커로 포함]`,
+      ].join("\n"),
+    });
+    return result;
+  }
+
+  // 6. 테스트 실패 수정 (Self-Healing 용)
   async fixTestFailure(testOutput: string): Promise<OmcResult> {
     const recorder = this.createThinkingRecorderForSkill("test-fix");
     recorder?.recordThought("start", "Attempting to fix test failures");
@@ -178,9 +233,28 @@ export class OmcClient {
 
   private async invoke(invocation: OmcInvocation, recorder?: ThinkingRecorder | null): Promise<OmcResult> {
     const startTime = Date.now();
+    const { skill } = invocation;
     let output   = "";
     let sessionId = "";
     let toolUses  = 0;
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
+
+    const heartbeatInterval = this.config.observer
+      ? setInterval(() => {
+          this.config.observer!.onHeartbeat({
+            skill,
+            elapsedMs: Date.now() - startTime,
+            toolUses,
+          });
+        }, 30_000)
+      : null;
+
+    const cleanup = () => {
+      clearTimeout(timeout);
+      if (heartbeatInterval !== null) clearInterval(heartbeatInterval);
+    };
 
     try {
       const queryOptions: any = {
@@ -194,12 +268,23 @@ export class OmcClient {
           cwd: this.config.cwd,
           maxTurns: 100,
           canUseTool: (toolName: string, toolInput: any) => {
+            // Bash로 git commit/push 실행 차단 (dev-scheduler가 처리)
+            if (toolName === "Bash" && toolInput?.command) {
+              const cmd = toolInput.command as string;
+              if (/git\s+(commit|push)/.test(cmd)) {
+                return { allowed: false, reason: "git commit/push는 dev-scheduler가 처리합니다. 파일 수정만 하세요." };
+              }
+            }
             if (["Edit", "Write"].includes(toolName) && toolInput?.file_path) {
+              // "**" 와일드카드는 모든 경로 허용
+              if (this.config.allowedPaths.includes("**")) {
+                return { allowed: true };
+              }
               const allowed = this.config.allowedPaths.some(
-                (p: string) => toolInput.file_path.includes(p)
+                (p: string) => toolInput.file_path.startsWith(p)
               );
               if (!allowed) {
-                return { allowed: false, reason: `Path not in allowedPaths` };
+                return { allowed: false, reason: `Path not in allowedPaths: ${toolInput.file_path}` };
               }
             }
             return { allowed: true };
@@ -211,9 +296,6 @@ export class OmcClient {
         queryOptions.options.resume = invocation.sessionId;
       }
 
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
-
       for await (const message of query(queryOptions)) {
         if (message.type === "system" && (message as any).subtype === "init") {
           sessionId = (message as any).session_id ?? "";
@@ -224,6 +306,11 @@ export class OmcClient {
             if ("text" in block) {
               output += block.text;
               recorder?.recordThought("assistant_response", block.text.substring(0, 500));
+              this.config.observer?.onProgress({
+                skill,
+                text: block.text.substring(0, 200),
+                toolUses,
+              });
             }
             if ("type" in block && block.type === "tool_use") {
               toolUses++;
@@ -232,6 +319,11 @@ export class OmcClient {
                 block.input as Record<string, unknown> ?? {},
                 undefined
               );
+              this.config.observer?.onProgress({
+                skill,
+                toolName: block.name ?? "unknown",
+                toolUses,
+              });
             }
           }
         }
@@ -243,16 +335,34 @@ export class OmcClient {
           } else {
             const errorMsg = msg.errors?.join("; ") || `Result error: ${msg.subtype}`;
             recorder?.recordError(errorMsg, "Result error");
-            throw new Error(errorMsg);
+            cleanup();
+            const result: OmcResult = {
+              success: false,
+              output,
+              sessionId,
+              durationMs: Date.now() - startTime,
+              toolUses,
+              error: errorMsg,
+            };
+            this.config.observer?.onComplete({ ...result, skill });
+            return result;
           }
         }
       }
 
-      clearTimeout(timeout);
-
-      return { success: true, output, sessionId, durationMs: Date.now() - startTime, toolUses };
+      cleanup();
+      const result: OmcResult = {
+        success: true,
+        output,
+        sessionId,
+        durationMs: Date.now() - startTime,
+        toolUses,
+      };
+      this.config.observer?.onComplete({ ...result, skill });
+      return result;
     } catch (error: any) {
-      return {
+      cleanup();
+      const result: OmcResult = {
         success: false,
         output,
         sessionId,
@@ -260,6 +370,8 @@ export class OmcClient {
         toolUses,
         error: error.message || String(error),
       };
+      this.config.observer?.onComplete({ ...result, skill });
+      return result;
     }
   }
 }
