@@ -10,14 +10,24 @@ import { scanBeforePR } from "../security/pre-pr-scanner.js";
 import { acquireLock, releaseLock } from "../state/lock-manager.js";
 import { updateState, getIssue, setIssuePrMap } from "../state/store.js";
 import { IssueState } from "../state/types.js";
-import type { Config, ProjectConfig } from "../state/types.js";
+import type { Config, ProjectConfig, ThinkingConfig, HealingConfig } from "../state/types.js";
 import { eventBus } from "../server/event-bus.js";
+import { SelfHealer, getDefaultHealingConfig } from "../core/self-healer.js";
+import { errorClassifier } from "../core/error-classifier.js";
+import { ThinkingRecorder, getDefaultThinkingConfig } from "../core/thinking-recorder.js";
+import { AIErrorAnalyzer, getDefaultAIAnalyzerConfig } from "../core/ai-error-analyzer.js";
+import type { AIAnalyzerConfig } from "../state/types.js";
 
 const PLAN_START_MARKER = "<!-- ISSUE_PILOT_PLAN_START -->";
 const PLAN_END_MARKER = "<!-- ISSUE_PILOT_PLAN_END -->";
 
 export class DevScheduler extends BaseScheduler {
   private jira: JiraClient | null = null;
+  private selfHealer: SelfHealer;
+  private healingConfig: HealingConfig;
+  private thinkingConfig: ThinkingConfig;
+  private aiAnalyzer: AIErrorAnalyzer;
+  private aiAnalyzerConfig: AIAnalyzerConfig;
 
   constructor(config: Config) {
     super({
@@ -25,6 +35,17 @@ export class DevScheduler extends BaseScheduler {
       pollIntervalSec: config.schedulers.devPollIntervalSec,
       config,
     });
+
+    // Healing 설정
+    this.healingConfig = config.healing ?? getDefaultHealingConfig();
+    this.selfHealer = new SelfHealer(this.healingConfig);
+
+    // Thinking 설정
+    this.thinkingConfig = config.thinking ?? getDefaultThinkingConfig();
+
+    // AI Analyzer 설정
+    this.aiAnalyzerConfig = config.aiAnalyzer ?? getDefaultAIAnalyzerConfig();
+    this.aiAnalyzer = new AIErrorAnalyzer(this.aiAnalyzerConfig);
 
     // Jira 연동 (활성화된 경우) - 전역 공유
     if (config.jira.enabled) {
@@ -34,6 +55,16 @@ export class DevScheduler extends BaseScheduler {
       } catch (err) {
         this.logError("Jira 클라이언트 초기화 실패 (Jira 없이 진행)", err);
       }
+    }
+
+    if (this.healingConfig.enabled) {
+      this.log("Self-Healing 기능 활성화");
+    }
+    if (this.thinkingConfig.enabled) {
+      this.log("Thinking Mode 기록 활성화");
+    }
+    if (this.aiAnalyzerConfig.enabled) {
+      this.log("AI Error Analyzer 활성화");
     }
   }
 
@@ -174,6 +205,14 @@ export class DevScheduler extends BaseScheduler {
 
       // 8) OMC autopilot으로 코드 변경 (cwd = 워크트리)
       this.log(`[${projectId}] 이슈 #${issueNumber} autopilot 실행 중 (워크트리: ${worktreePath})...`);
+
+      // ThinkingRecorder 생성 (Thinking Mode 활성화 시)
+      const thinkingRecorder = this.thinkingConfig.enabled
+        ? new ThinkingRecorder(this.thinkingConfig, worktreePath, issueNumber, "dev-scheduler")
+        : null;
+
+      thinkingRecorder?.recordThought("init", `Starting development for issue #${issueNumber}`);
+
       const omc = new OmcClient({
         cwd: worktreePath,
         allowedTools: this.config.omc.allowedTools,
@@ -181,17 +220,58 @@ export class DevScheduler extends BaseScheduler {
         allowedPaths: this.config.omc.allowedPaths,
         timeoutMs: this.config.omc.timeoutMs,
         permissionMode: this.config.omc.permissionMode,
+        thinkingConfig: this.thinkingConfig,
+        issueNumber,
       });
 
       const execResult = await omc.executeCode(sanitizedPlan);
 
       if (!execResult.success) {
-        // 빌드 실패 시 build-fixer 최대 2회 시도
-        const fixed = await this.tryFixBuild(omc, execResult.error ?? "코드 실행 실패");
-        if (!fixed) {
-          throw new Error(execResult.error ?? "코드 변경 실패");
+        const errorMessage = execResult.error ?? "코드 실행 실패";
+        thinkingRecorder?.recordError(errorMessage, "Code execution failed");
+
+        // Self-Healing 시도
+        if (this.healingConfig.enabled) {
+          const healingResult = await this.selfHealer.heal({
+            projectId,
+            issueNumber,
+            worktreePath,
+            baseBranch,
+            errorMessage,
+            omc,
+            thinkingRecorder,
+          });
+
+          if (healingResult.success) {
+            this.log(`[${projectId}] Self-Healing 성공: ${healingResult.strategy}`);
+            thinkingRecorder?.recordThought("healing_success", `Self-healing succeeded with strategy: ${healingResult.strategy}`);
+            // 재시도 (healing 성공 후)
+            const retryResult = await omc.executeCode(sanitizedPlan);
+            if (!retryResult.success) {
+              throw new Error(retryResult.error ?? "Self-healing 후 재시도 실패");
+            }
+          } else {
+            this.log(`[${projectId}] Self-Healing 실패: ${healingResult.message}`);
+            thinkingRecorder?.recordThought("healing_failed", healingResult.message);
+
+            // 기존 build-fixer 폴백
+            const fixed = await this.tryFixBuild(omc, errorMessage);
+            if (!fixed) {
+              thinkingRecorder?.recordResult(false, `Development failed: ${errorMessage}`);
+              throw new Error(errorMessage);
+            }
+          }
+        } else {
+          // Self-Healing 비활성화 시 기존 로직
+          const fixed = await this.tryFixBuild(omc, errorMessage);
+          if (!fixed) {
+            thinkingRecorder?.recordResult(false, `Development failed: ${errorMessage}`);
+            throw new Error(errorMessage);
+          }
         }
       }
+
+      thinkingRecorder?.recordThought("code_execution_complete", "Code changes applied successfully");
 
       // 9) PR 전 보안 스캐닝
       if (this.config.security.preScanEnabled) {
@@ -420,9 +500,29 @@ export class DevScheduler extends BaseScheduler {
       await github.addLabel(issueNumber, labels.devFailed);
       updateState(projectId, issueNumber, IssueState.DEV_FAILED, { retryCount, errorLog: errMsg });
 
+      // AI 에러 분석 수행 (최종 실패 시)
+      let aiAnalysisComment = "";
+      if (this.aiAnalyzerConfig.enabled && this.aiAnalyzerConfig.analyzeOnFinalFailure) {
+        this.log(`[${projectId}] 이슈 #${issueNumber} AI 에러 분석 시작...`);
+        const errorType = errorClassifier.classify(errMsg);
+        const analysisResult = await this.aiAnalyzer.analyze({
+          projectId,
+          issueNumber,
+          errorMessage: errMsg,
+          errorType,
+        });
+
+        if (analysisResult.success && analysisResult.analysis) {
+          this.log(`[${projectId}] AI 에러 분석 완료: ${analysisResult.reportPath}`);
+          aiAnalysisComment = "\n\n" + this.aiAnalyzer.formatForGitHubComment(analysisResult.analysis);
+        } else {
+          this.logError(`[${projectId}] AI 에러 분석 실패`, analysisResult.error);
+        }
+      }
+
       await github.addComment(
         issueNumber,
-        `개발이 ${this.retryPolicy.maxRetries}회 모두 실패했습니다. 수동 개입이 필요합니다.\n\`\`\`\n${errMsg}\n\`\`\``
+        `개발이 ${this.retryPolicy.maxRetries}회 모두 실패했습니다. 수동 개입이 필요합니다.\n\`\`\`\n${errMsg}\n\`\`\`${aiAnalysisComment}`
       );
     }
   }
