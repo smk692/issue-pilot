@@ -102,11 +102,19 @@ function migrateSchema(database: Database.Database): void {
   } catch {
     // 이미 컬럼이 존재하면 무시
   }
+
+  // issues 테이블에 title 컬럼 추가 시도
+  try {
+    database.exec(`ALTER TABLE issues ADD COLUMN title TEXT;`);
+  } catch {
+    // 이미 컬럼이 존재하면 무시
+  }
 }
 
 function rowToRecord(row: any): IssueRecord {
   return {
     issueNumber: row.issue_number,
+    title: row.title ?? undefined,
     currentState: row.current_state as IssueState,
     prNumber: row.pr_number ?? undefined,
     branchName: row.branch_name ?? undefined,
@@ -133,10 +141,11 @@ export function upsertIssue(projectId: string, record: IssueRecord): void {
   database
     .prepare(
       `INSERT INTO issues
-         (project_id, issue_number, current_state, pr_number, branch_name, jira_ticket,
+         (project_id, issue_number, title, current_state, pr_number, branch_name, jira_ticket,
           plan_content, retry_count, error_log, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(project_id, issue_number) DO UPDATE SET
+         title         = COALESCE(excluded.title, issues.title),
          current_state = excluded.current_state,
          pr_number     = excluded.pr_number,
          branch_name   = excluded.branch_name,
@@ -149,6 +158,7 @@ export function upsertIssue(projectId: string, record: IssueRecord): void {
     .run(
       projectId,
       record.issueNumber,
+      record.title ?? null,
       record.currentState,
       record.prNumber ?? null,
       record.branchName ?? null,
@@ -288,7 +298,7 @@ export function getRecentActivity(limit: number = 50): ActivityEntry[] {
   const database = getDb();
   const rows = database
     .prepare(
-      `SELECT rowid as id, updated_at as ts, current_state as type, project_id, issue_number, pr_number
+      `SELECT rowid as id, updated_at as ts, current_state as type, project_id, issue_number, pr_number, title
        FROM issues
        ORDER BY updated_at DESC
        LIMIT ?`
@@ -300,6 +310,7 @@ export function getRecentActivity(limit: number = 50): ActivityEntry[] {
       project_id: string;
       issue_number: number;
       pr_number: number | null;
+      title: string | null;
     }[];
   return rows.map((r) => ({
     id: r.id,
@@ -308,7 +319,10 @@ export function getRecentActivity(limit: number = 50): ActivityEntry[] {
     projectId: r.project_id,
     issueNumber: r.issue_number,
     prNumber: r.pr_number ?? undefined,
-    message: `이슈 #${r.issue_number} 상태: ${r.type}`,
+    title: r.title ?? undefined,
+    message: r.title
+      ? `이슈 #${r.issue_number} ${r.title} — 상태: ${r.type}`
+      : `이슈 #${r.issue_number} 상태: ${r.type}`,
   }));
 }
 
@@ -394,6 +408,21 @@ export function recordHealingAttempt(
 }
 
 /**
+ * 특정 이슈의 healing 시도 기록을 초기화한다 (dev-scheduler 재시도 시 호출).
+ */
+export function resetHealingAttempts(
+  projectId: string,
+  issueNumber: number
+): void {
+  const database = getDb();
+  database
+    .prepare(
+      `DELETE FROM healing_attempts WHERE project_id = ? AND issue_number = ?`
+    )
+    .run(projectId, issueNumber);
+}
+
+/**
  * 특정 이슈의 모든 healing 시도를 반환한다.
  */
 export function getHealingAttempts(
@@ -427,6 +456,57 @@ export function getHealingAttempts(
   return rows.map((r) => ({
     errorType: r.error_type,
     attemptCount: r.attempt_count,
+    strategy: r.strategy,
+    success: r.success === 1,
+    errorMessage: r.error_message ?? undefined,
+    createdAt: r.created_at,
+  }));
+}
+
+/**
+ * 전체 healing 시도 이력을 반환한다 (대시보드용).
+ */
+export function getAllHealingAttempts(): Array<{
+  id: number;
+  projectId: string;
+  issueNumber: number;
+  errorType: string;
+  attemptCount: number;
+  maxAttempts: number;
+  strategy: string;
+  success: boolean;
+  errorMessage?: string;
+  createdAt: string;
+}> {
+  const database = getDb();
+  const rows = database
+    .prepare(
+      `SELECT id, project_id, issue_number, error_type, attempt_count, max_attempts,
+              strategy, success, error_message, created_at
+       FROM healing_attempts
+       ORDER BY created_at DESC
+       LIMIT 200`
+    )
+    .all() as Array<{
+      id: number;
+      project_id: string;
+      issue_number: number;
+      error_type: string;
+      attempt_count: number;
+      max_attempts: number;
+      strategy: string;
+      success: number;
+      error_message: string | null;
+      created_at: string;
+    }>;
+
+  return rows.map((r) => ({
+    id: r.id,
+    projectId: r.project_id,
+    issueNumber: r.issue_number,
+    errorType: r.error_type,
+    attemptCount: r.attempt_count,
+    maxAttempts: r.max_attempts,
     strategy: r.strategy,
     success: r.success === 1,
     errorMessage: r.error_message ?? undefined,

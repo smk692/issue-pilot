@@ -4,13 +4,13 @@ import { join, dirname } from "path";
 import { BaseScheduler } from "./base-scheduler.js";
 import { GitHubClient } from "../clients/github-client.js";
 import { OmcClient } from "../clients/omc-client.js";
-import type { OmcObserver } from "../clients/omc-client.js";
-import { registerAgent, unregisterAgent, updateAgentActivity } from "../state/active-agents.js";
+import { registerAgent } from "../state/active-agents.js";
+import { createDashboardObserver } from "../server/observer-factory.js";
 import { JiraClient } from "../clients/jira-client.js";
 import { sanitizeIssueBody } from "../security/input-sanitizer.js";
 import { scanBeforePR } from "../security/pre-pr-scanner.js";
 import { acquireLock, releaseLock } from "../state/lock-manager.js";
-import { updateState, getIssue, setIssuePrMap } from "../state/store.js";
+import { updateState, getIssue, setIssuePrMap, resetHealingAttempts } from "../state/store.js";
 import { IssueState } from "../state/types.js";
 import type { Config, ProjectConfig, ThinkingConfig, HealingConfig } from "../state/types.js";
 import { eventBus } from "../server/event-bus.js";
@@ -157,6 +157,11 @@ export class DevScheduler extends BaseScheduler {
       const record = getIssue(projectId, issueNumber);
       const retryCount = record?.retryCount ?? 0;
 
+      // 재시도 시 이전 healing 시도 기록 초기화 (카운터 누적 방지)
+      if (retryCount > 0) {
+        resetHealingAttempts(projectId, issueNumber);
+      }
+
       // 3) 플랜 마커 파싱
       const planContent = await this.extractPlanContent(projectId, github, issueNumber);
       if (!planContent) {
@@ -211,9 +216,14 @@ export class DevScheduler extends BaseScheduler {
       }
 
       // 상태 업데이트
-      updateState(projectId, issueNumber, IssueState.DEVELOPING, { branchName, retryCount });
+      updateState(projectId, issueNumber, IssueState.DEVELOPING, { title: issue.title, branchName, retryCount });
 
-      // 7) 플랜 사니타이징
+      // 7) uipro-cli 초기화 (프론트엔드 프로젝트)
+      if (project.frontend) {
+        this.initUipro(worktreePath, projectId, issueNumber);
+      }
+
+      // 8) 플랜 사니타이징
       const sanitizedPlan = this.config.security.sanitizeInput
         ? sanitizeIssueBody(planContent)
         : planContent;
@@ -239,37 +249,7 @@ export class DevScheduler extends BaseScheduler {
         toolUses: 0,
       });
 
-      const observer: OmcObserver = {
-        onProgress({ skill, toolName, text, toolUses }) {
-          updateAgentActivity(projectId, issueNumber, { toolUses });
-          eventBus.emit("dashboard", {
-            id: 0,
-            ts: new Date().toISOString(),
-            type: "agent_progress",
-            projectId,
-            issueNumber,
-            skill,
-            toolName,
-            text,
-            toolUses,
-          });
-        },
-        onHeartbeat({ skill, elapsedMs, toolUses }) {
-          eventBus.emit("dashboard", {
-            id: 0,
-            ts: new Date().toISOString(),
-            type: "agent_heartbeat",
-            projectId,
-            issueNumber,
-            skill,
-            elapsedMs,
-            toolUses,
-          });
-        },
-        onComplete() {
-          unregisterAgent(projectId, issueNumber);
-        },
-      };
+      const observer = createDashboardObserver(projectId, issueNumber, "autopilot");
 
       const omc = new OmcClient({
         cwd: worktreePath,
@@ -499,6 +479,20 @@ export class DevScheduler extends BaseScheduler {
       });
     } catch {
       // remote 브랜치 없으면 무시
+    }
+  }
+
+  /**
+   * 프론트엔드 프로젝트 worktree에 uipro-cli를 초기화한다.
+   * 실패해도 개발 진행을 막지 않는다.
+   */
+  private initUipro(worktreePath: string, projectId: string, issueNumber: number): void {
+    try {
+      execSync("npm install -g uipro-cli", { stdio: "pipe", timeout: 60_000 });
+      execSync("uipro init --ai claude", { cwd: worktreePath, stdio: "pipe", timeout: 30_000 });
+      this.log(`[${projectId}] 이슈 #${issueNumber} uipro-cli 초기화 완료`);
+    } catch (err) {
+      this.logError(`[${projectId}] 이슈 #${issueNumber} uipro-cli 초기화 실패 (계속 진행)`, err);
     }
   }
 
